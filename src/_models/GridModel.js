@@ -349,6 +349,7 @@ function queryPageCount(proxyConfig, queryParams, callback) {
 // ============================================================
 
 export class GridModel extends BaseModel {
+    modelType = 'GridModel'
     constructor(props = {}) {
         const data = { ...createDefaultProps(), ...props }
         // `dataSource: fn` 是旧写法，含义是「取数函数」而不是「数据」，这里统一收敛掉

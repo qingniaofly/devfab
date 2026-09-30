@@ -119,7 +119,7 @@ export default class ViewModel extends BaseModel {
         const propertyNames = this._get_data('propertyNames')
         for (let i = 0, len = propertyNames.length; i < len; i++) {
             gridModel = this.get(propertyNames[i])
-            const isGridModel = gridModel instanceof GridModel
+            const isGridModel = gridModel instanceof GridModel || gridModel.modelType == 'GridModel'
             if (isGridModel) {
                 this._set_data('gridModel', gridModel)
                 return gridModel
@@ -132,7 +132,8 @@ export default class ViewModel extends BaseModel {
         const gridModels = []
         for (let i = 0, len = propertyNames.length; i < len; i++) {
             const gridModel = this.get(propertyNames[i])
-            if (gridModel instanceof GridModel) {
+            const isGridModel = gridModel instanceof GridModel || gridModel.modelType == 'GridModel'
+            if (isGridModel) {
                 gridModels.push(gridModel)
             }
         }
