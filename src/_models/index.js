@@ -17,19 +17,19 @@ function createModelFactory(props) {
     return model
 }
 
-function _initExtendJs(args) {
+function _initExtendJs(params) {
     const self = this
     if (window && window.__debugger_initExtendJs) {
         // eslint-disable-next-line no-debugger
         debugger
     }
     const {
-        require: _require,
+        requirejs,
         extendFilePath,
         pageKey,
         enableExtendJs = true, // 是否启用拓展脚本
         extendJsPath = '_VM.Extend.js', // 拓展脚本格式
-    } = args || {}
+    } = params
     if (!enableExtendJs) {
         self.execute('extendReady', self)
         return
@@ -39,12 +39,12 @@ function _initExtendJs(args) {
     // if (self.getEnv && self.getEnv('everyCommonExtend')) {
     // 	extendFiles.push(self.getEnv('everyCommonExtend'))
     // }
-    if (typeof _require !== 'function') {
+    if (typeof requirejs.require !== 'function') {
         console.warn(`requirejs.js 未加载，跳过扩展脚本：${extendFile}`)
         self.execute('extendReady', self)
         return
     }
-    _require(
+    requirejs.require(
         extendFilePath,
         extendFiles,
         (extend, everyCommonExtend) => {
@@ -70,7 +70,7 @@ function _initExtendJs(args) {
     )
 }
 
-const _extscripturls = async (result, vm) => {
+const _extscripturls = async (result, vm, params) => {
     let { extscripturls: exturls = [] } = result
     // 支持注入单据级本地化扩展脚本
     exturls = (vm.getCache('localDynamicScripts') || []).concat(exturls)
@@ -95,19 +95,24 @@ const _extscripturls = async (result, vm) => {
     // 加载扩展脚本
     result.extscripturls = exturls
     return new Promise((resolve, reject) => {
-        _requireExtscripturls(result, vm, () => {
+        _requireExtscripturls(result, vm, params, () => {
             resolve(true)
         })
     })
 }
 
-function _requireExtscripturls(result, vm, callback) {
+function _requireExtscripturls(result, vm, params, callback) {
     // 二开、客开的扩展脚本
     const { extscripturls: exturls = [] } = result
     if (exturls?.length) {
         try {
-            // 使用 rest 参数替代 arguments，符合 prefer-rest-params 规则
-            window.__devfab.requireInner(
+            const requireInner = params?.requirejs?.requireInner
+            if (typeof requireInner !== 'function') {
+                console.warn(`requirejs.js 未加载，跳过客开扩展脚本`)
+                callback?.(result, vm)
+                return
+            }
+            requireInner(
                 exturls,
                 // eslint-disable-next-line prefer-arrow-callback
                 function (...args) {
@@ -146,16 +151,12 @@ function _requireExtscripturls(result, vm, callback) {
         callback?.(result, vm)
     }
 }
-function _createViewModel(meta, params) {
-    let _require = window.__devfab?.require
+function _createViewModel(meta, params = {}) {
     const {
         extendFilePathField = 'domainKey',
         pageKeyField = 'billNo',
         modelNameField = 'cName', // 用于生成模型的字段
-    } = params || {}
-    if (params?.require) {
-        _require = params?.require
-    }
+    } = params
     const extendFilePath = meta[extendFilePathField] || ''
     const pageKey = meta[pageKeyField] || ''
 
@@ -182,7 +183,7 @@ function _createViewModel(meta, params) {
         }
 
         initData() {
-            _initExtendJs.call(this, { ...params, require: _require, extendFilePath, pageKey })
+            _initExtendJs.call(this, { ...params, extendFilePath, pageKey })
         }
     }
 
@@ -197,7 +198,10 @@ function _initViewModel(meta, params) {
     return vm
 }
 
-export function initViewModel(meta, params, callback) {
+export function initViewModel(meta, params = {}, callback) {
+    if (!params?.requirejs) {
+        params.requirejs = window.__devfab
+    }
     let vm = _initViewModel(meta, params)
     vm.on('destroyVM', () => {
         vm?.destroyVM?.()
@@ -206,7 +210,7 @@ export function initViewModel(meta, params, callback) {
     vm.on('extendReady', async () => {
         const promises = []
         // 加载二开脚本
-        promises.push(_extscripturls(meta, vm))
+        promises.push(_extscripturls(meta, vm, params))
         await Promise.all(promises)
         // console.info(`[initVM]: after vm init ${  moment().format('YYYY-MM-DD HH:mm:ss.SSS')}`)
         callback?.(vm, meta)
