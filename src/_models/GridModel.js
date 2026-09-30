@@ -1,26 +1,5 @@
 import BaseModel from './BaseModel'
 
-/**
- * models - GridModel
- *
- * 参照中台 `mdf-cube/src/models/GridModel.js`（`cb.models.register('GridModel')`）重写，
- * 把它的约定搬进我们这套 devfab 的 ui-model 体系：
- *
- * 1. 两层数据：`dataSource`（全量原始数据）+ `rows`（当前展示行，本地模式下是 dataSource 的分页切片）；
- * 2. 行状态与数据同序：`rowsDataState[i]` 对应 `dataSource[i]`，取值见 DataStates；
- * 3. 内部字段由 `innerUsedAttrs` 统一定义：`_id` / `_selected` / `_status`；
- * 4. 列是 **object map**（key = field），不是数组 —— 给 vxe-grid 渲染时用 `getColumnList()` 转数组；
- * 5. 分页状态叫 `pageInfo`（pageIndex/pageSize/pageCount/recordCount），不叫 pager；
- * 6. 行、单元格、列都可以挂状态：`rowState` / `cellState`；
- * 7. 选中分「当前页 `_selected` 标记」与「跨页选中缓存（selectedKeysSet + selectedRowsMap）」两层。
- *
- * 与中台实现不同的地方（有意为之，都有注释说明）：
- * - 中台的取数配置走 `proxyConfig` + `setProxy`，我们直接保留 `proxyConfig.load`（函数或 url），
- *   并兼容旧的 `dataSource: fn` / `cUrl` 写法；
- * - 中台的 `setRows` 会把 `getShowRows()`（展示文案副本）推给组件，我们推**原始行对象**，
- *   否则选中回灌、单元格编辑会落到副本上；
- * - 中台的行模型（editRowModel / ReferModel / 特征 / 孙表）没有移植，这里只做行级与单元格级能力。
- */
 export const DataStates = {
     Unchanged: '',
     Insert: 'Insert',
@@ -74,7 +53,7 @@ function normalizeColumns(columns) {
 
 // ---------------- 响应体：从各种后端结构里取行与总数 ----------------
 
-function resolveRows(res) {
+function resolveRowsData(res) {
     if (!res) return []
     if (isArray(res)) return res
     if (isArray(res.data)) return res.data
@@ -168,182 +147,43 @@ function resolveProxyConfig(props = {}) {
     return proxy
 }
 
-/* code-link-enable */
-const showPageInner = function (proxyConfig, queryParams, callback, refresh, needLoadPageination, backQueryPageCount, extraProps) {
-    this.promiseExecute('beforeBatchModifyPull', () => {
-        // this.rebuildProxyConfig(proxyConfig);
+function _getData(proxyConfig, queryParams, callback) {
+    this.promiseExecute('beforeQuery', { proxyConfig, queryParams }, () => {
+        const self = this
         const proxy = this.setProxy({ queryData: proxyConfig })
         const defaultParams = { page: { pageSize: this.getPageSize(), pageIndex: this.getPageIndex() } }
-        if (!defaultParams.page.pageSize) {
-            this.setPageSize(10)
-            defaultParams.page.pageSize = 10
-        }
-        const bLoadPagination = this._get_data('bLoadPagination')
-        if (!bLoadPagination && !needLoadPageination) defaultParams.page.totalCount = 1
-
-        const delayLoadPageInfo = this._get_data('delayLoadPageInfo')
-        if (bLoadPagination && delayLoadPageInfo) {
-            if (refresh) {
-                this.setState('showDelayPagination', true)
-            }
-            defaultParams.page.totalCount = 1
-        }
         const params = Object.assign(defaultParams, queryParams)
         this.setCache('proxyCache', { proxyConfig, params })
         let queryCount = 0
-        const responseData = {}
         const viewModel = this.getRootParent()
-
-        const self = this
-
-        // 增加queryId解决 报表临时表锁问题
-        const queryId = new Date().valueOf()
-        params.queryId = queryId
-
-        const needReloadDatasource = true
-
         const queryDataCallback = function (err, result, callBackMsg, errorDetail, ...args) {
-            setTimeout(() => {
-                self.clearCache('isGridInLoading')
-            }, 0)
-            viewModel?.clearCache('lazySearch')
             if (err) {
-                this.setState('showDelayPagination', false)
-                this.clearCache('setPageIndexFromBack')
-
                 return
             }
-
-            result = result || {} // 容错处理null或者undefined情况
             this._set_data('dataSourceMode', 'remote') // 处理请求过程中被修改
-            if (refresh && bLoadPagination && delayLoadPageInfo) {
-                queryCount++
-                result = Object.assign(responseData, result)
-            }
-            const data = Array.isArray(result.recordList) ? result.recordList : []
+            result = Object.assign({}, result)
+            const data = resolveRowsData(result)
 
-            if ((!(bLoadPagination && delayLoadPageInfo) || queryCount === 2) && callback) {
-                callback.call(this, result, callBackMsg, errorDetail)
-            }
-            const fromBack = this.getCache('setPageIndexFromBack') // 是否是从卡片页返回的
-            this.clearCache('setPageIndexFromBack')
-
-            if (!this.execute('beforeSetDataSource', data)) return
-
-            const rowKeyField = this._get_data('rowKeyField')
-            const keyMap = {}
-            data.forEach(function (item) {
-                keyMap[item[rowKeyField]] = item
-            })
-            this._set_data('keyMap', keyMap)
-            if (!refresh && this._get_data('override') === false) {
-                this._set_data('dataSource', this._get_data('dataSource').concat(data), true)
-            } else {
-                this._set_data('dataSource', data, true)
-                this.doPropertyChange('resetCellStatus')
-                this._set_data('cellState', {}, true)
-                this._set_data('rowState', {}, true)
-            }
-            // 存入当前model缓存便于client端搜索
-            this.setCache('currentGridData', data)
-            if (data.length) {
-                setIds.call(this, data)
-            }
-
-            this.initRowState()
-            // 修改缓存数据
-            setCachePaginationRowData.call(this, data)
-            const sortParams = this._get_data('sortParams')
-            const colFilterParams = this._get_data('colFilterParams')
-            this.showRows(null, !cb.utils.isEmptyObject(colFilterParams))
-            let pageInfo = this._get_data('pageInfo')
-            // bLoadPagination 优先级比 delayLoadPageInfo 高，bLoadPagination开启时值是false，所以第一项条件需要用 bLoadPagination = false 约束 delayLoadPageInfo = true 的情况
-            if (bLoadPagination && !delayLoadPageInfo && (this._get_data('bLoadPagination') || needLoadPageination)) {
-                pageInfo = {
-                    pageSize: result.pageSize,
-                    pageIndex: result.pageIndex,
-                    pageCount: result.pageCount,
-                    recordCount: result.recordCount,
-                }
-                this.setPageInfo(pageInfo)
-            } else {
-                pageInfo.pageIndex = result.pageIndex
-                pageInfo.from = 'showPageInner'
-                this.setPageInfo(pageInfo)
-            }
-
-            resetSelected.call(this)
-            if (!(this.getParent?.()?.getParams?.()?.templateType === 'splitview')) {
-                this._set_data('focusedRowIndex', -1) // 重置选中行
-            }
-            this.execute('afterSetDataSource', data, result.viewmodel, args?.[1]) // 社保缴交节点翻页的时候需要改columns
+            callback?.call(this, data)
         }
 
-        if (needReloadDatasource) {
-            if (viewModel.execute('beforeQueryData', params) === false) return
-            self.setCache('lastGridFilterCondition', JSON.stringify(params?.condition))
-            const queryDataParams = _.cloneDeep(params)
-            proxy.queryData(queryDataParams, queryDataCallback, this)
-        }
-        if (refresh && bLoadPagination && delayLoadPageInfo) {
-            const queryPageProxyConfig = JSON.parse(JSON.stringify(proxyConfig))
-            if (!queryPageProxyConfig.options) {
-                queryPageProxyConfig.options = {}
-            }
-            queryPageProxyConfig.options.mask = false
-            const _callback = (pageInfo) => {
-                queryCount++
-                Object.assign(responseData, pageInfo)
-                if (queryCount === 2 && callback) {
-                    callback.call(this, responseData)
-                }
-            }
-            queryPageCount.call(this, queryPageProxyConfig, params, (pageInfo) => {
-                _callback(pageInfo)
-            })
-        }
+        if (this.execute('beforeQueryData', params) === false) return
+        const queryDataParams = _.cloneDeep(params)
+        proxy.queryData(queryDataParams, queryDataCallback, self)
     })
 }
 
-/* 查询分页 */
-function queryPageCount(proxyConfig, queryParams, callback) {
-    this.setCache('queryPageCountLoading', true)
-    // this.rebuildProxyConfig(proxyConfig);
-    const proxy = this.setProxy({ queryPageCount: { ...proxyConfig } })
-    const defaultParams = { page: { totalCount: -1 } }
-
-    const params = Object.assign(true, queryParams, defaultParams)
-
-    if (!this.__queryPageCountRequestId) this.__queryPageCountRequestId = 0
-    this.__queryPageCountRequestId++
-    const queryPageCountCallback = function (requestId, err, result) {
-        if (this.__queryPageCountRequestId !== requestId) return
-        this.setCache('queryPageCountLoading', false)
-        this.setState('showDelayPagination', false)
-        if (err) {
-            const currentpageinfo = this._get_data('pageInfo')
-            if (currentpageinfo) {
-                // 接口报错时，分页组件信息保持原来的值
-                this.setPageInfo(currentpageinfo)
-            }
-            return
-        }
-        result = result || {} // 容错处理null或者undefined情况
-        const pageInfo = {
-            beginPageIndex: result.beginPageIndex,
-            endPageIndex: result.endPageIndex,
-            pageSize: result.pageSize,
-            pageIndex: result.pageIndex,
-            pageCount: result.pageCount,
-            recordCount: result.recordCount,
-        }
-        if (callback) {
-            callback.call(this, pageInfo)
-        }
-        this.setPageInfo(pageInfo)
-        this.execute('afterQueryPageInfo', result)
-    }
-    proxy.queryPageCount(params, queryPageCountCallback.bind(this, this.__queryPageCountRequestId), this)
+function _setData(data) {
+    if (!this.execute('beforeSetDataSource', data)) return
+    const rowKeyField = this._get_data('rowKeyField')
+    const keyMap = {}
+    data.forEach(function (item) {
+        keyMap[item[rowKeyField]] = item
+    })
+    this._set_data('keyMap', keyMap)
+    this._set_data('dataSource', data, true)
+    this.doPropertyChange('setDataSource')
+    this.execute('afterSetDataSource', data)
 }
 
 // ============================================================
@@ -528,77 +368,43 @@ export class GridModel extends BaseModel {
 
     /* ============================ 取数 ============================ */
 
-    // 中台签名：load(proxyConfig, params, callback) = 设置取数配置并立刻取一次
-    load(proxyConfig, params, callback) {
-        // if (proxyConfig) this.setProxy(proxyConfig)
-        // return this.fetch(params || {}).then((result) => {
-        // 	if (typeof callback === 'function') callback.call(this, null, result)
-        // 	return result
-        // })
+    /* ======================= 数据写入 ======================= */
 
-        const proxy = this.setProxy({ load: proxyConfig })
-        proxy.load(
-            params,
-            function (err, result) {
-                if (err) {
-                    cb.utils.alert(err, 'error')
-                    return
-                }
-                if (result.schema) {
-                    this._set_data('columnMode', 'remote')
-                    this.setColumns(result.schema)
-                }
-                this.setDataSource(result.data)
-                if (callback) {
-                    callback.call(this)
-                }
-            },
-            this
-        )
+    setDataSource(proxyConfig, queryParams = {}, callback) {
+        if (this._get_data('dataSourceMode') === 'local') {
+            const data = cb.utils.isArray(proxyConfig) ? proxyConfig : []
+            _setData(data)
+        } else {
+            if (!this.execute('beforeProxyLoad', queryParams)) return
+            const pageInfo = this._get_data('pageInfo')
+            pageInfo.pageIndex = 1
+            this._set_data('proxyConfig', proxyConfig)
+            this._set_data('queryParams', queryParams)
+            this._set_data('loadDataCallback', callback)
+            _getData.call(this, proxyConfig, queryParams, (data) => {
+                _setData.call(this, data)
+                callback?.call(this)
+            })
+        }
     }
 
-    // 重新取数：优先驱动已挂载的表格（走表格自带的分页状态），没有视图时直接取数
-    refresh(params = {}) {
-        if (this.hasEvent('refresh')) return this.execute('refresh', params)
-        return this.fetch({ body: params })
-    }
+    reload() {
+        const proxy = this.getProxy()
+        const proxyConfig = this._get_data('proxyConfig')
+        const queryParams = this._get_data('queryParams')
+        const callback = this._get_data('loadDataCallback')
 
-    loadData(params = {}) {
-        return this.refresh(params)
-    }
-
-    queryData(params = {}) {
-        return this.refresh(params)
+        _getData.call(this, proxyConfig, queryParams, (data) => {
+            _setData.call(this, data)
+            callback?.call(this)
+        })
     }
 
     /* ======================== 数据（两层） ======================== */
 
-    /** 全量数据源（中台 getRealData 的语义：不拷贝，剔除已删除行） */
     getDataSource() {
         const source = this._get_data('dataSource') || []
-        if (!this.hasDeletedRow()) return source
-        const rowsDataState = this._get_data('rowsDataState') || []
-        return source.filter((row, index) => rowsDataState[index] !== DataStates.Delete)
-    }
-
-    getRealData() {
-        return this.getDataSource()
-    }
-
-    getRealRows() {
-        return this._get_data('rows') || []
-    }
-
-    getRowsCount() {
-        return (this._get_data('rows') || []).length
-    }
-
-    getDataSourceCount() {
-        return (this._get_data('dataSource') || []).length
-    }
-
-    hasDeletedRow() {
-        return (this._get_data('rowsDataState') || []).some((state) => state === DataStates.Delete)
+        return source
     }
 
     /**
@@ -1225,53 +1031,6 @@ export class GridModel extends BaseModel {
         const { pageIndex, pageSize } = this.getPageInfo()
         const start = (pageIndex - 1) * pageSize
         this.setRows(source.slice(start, start + pageSize))
-    }
-
-    /* ======================= 数据写入 ======================= */
-
-    /** 全量赋值（中台 setDataSource）：本地模式重新切片，远程模式等于当前页 */
-    setDataSource(proxyConfig, queryParams = {}, callback) {
-        if (this._get_data('dataSourceMode') === 'local') {
-            const data = cb.utils.isArray(proxyConfig) ? proxyConfig : []
-            if (!this.execute('beforeSetDataSource', data)) return
-            const rowKeyField = this._get_data('rowKeyField')
-            const keyMap = {}
-            data.forEach(function (item) {
-                keyMap[item[rowKeyField]] = item
-            })
-            this._set_data('keyMap', keyMap)
-            this._set_data('dataSource', data, true)
-            const grandson = this.getCache('grandson')
-            if (data.length) {
-                setIds.call(this, data)
-            }
-
-            this.initRowState()
-            // 修改缓存数据
-            setCachePaginationRowData.call(this, data)
-            // 修改行号
-            this.doPropertyChange('resetCellStatus')
-
-            this._set_data('rowState', {}, true)
-            // this.showRows(null, true)
-            this.doPropertyChange('setDataSource', this.getShowRows())
-            this._set_data('delayInsertRows', []) // setDataSource方法会同步模型和组件数据，把延迟存的数据清掉
-            if (this._get_data('isSorting')) {
-                this._set_data('isSorting', false)
-            }
-
-            this.execute('afterSetDataSource', data)
-        } else {
-            if (!this.execute('beforeProxyLoad', queryParams)) return
-            const pageInfo = this._get_data('pageInfo')
-            pageInfo.pageIndex = 1
-            const needLoadPageination = true
-            // this.rebuildProxyConfig(proxyConfig)
-            this._set_data('proxyConfig', proxyConfig)
-            this._set_data('queryParams', queryParams)
-            this._set_data('callback', callback)
-            showPageInner.call(this, proxyConfig, queryParams, callback, true, needLoadPageination)
-        }
     }
 
     /** 只换当前页 rows（中台 setRows） */

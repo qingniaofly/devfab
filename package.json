@@ -1,6 +1,6 @@
 {
   "name": "devfab",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Devfab is a library for developer building low code factory",
   "main": "./dist/index.js",
   "module": "./dist/index.esm.js",
