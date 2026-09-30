@@ -1,0 +1,10 @@
+# don't ever lint node_modules
+node_modules
+# don't lint build output (make sure it's set to your correct build folder name)
+build
+# don't lint nyc coverage output
+dist
+# 构建产物与 vendored 第三方代码，不参与 lint
+lib
+docs
+src/_lib/requirejs.js

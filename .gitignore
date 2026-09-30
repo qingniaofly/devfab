@@ -1,0 +1,18 @@
+# Created by .ignore support plugin (hsz.mobi)
+node_modules
+npm-debug.log
+package-lock.json
+# Exclude compiled files
+build
+dist
+lib
+temp
+
+# Exclude IDE project folders
+.happypack
+.idea
+.vscode
+.npmrc
+
+# webpack stats
+stats.json
